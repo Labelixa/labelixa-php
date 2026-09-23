@@ -1,0 +1,19 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      # PHP ships with the runner image; the package has no dependencies and
+      # the tests use a fake transport, so there is nothing to install.
+      - run: php --version
+      - run: find src test -name '*.php' -print0 | xargs -0 -n1 php -l
+      - run: php test/run.php
+      # Publish guard: English-only, no internal notes.
+      - run: python3 scripts/check_publish.py .

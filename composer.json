@@ -1,0 +1,41 @@
+{
+  "name": "labelixa/labelixa",
+  "description": "Thin PHP client for the Labelixa API: render, validate and convert ZPL, EPL, TSPL and CPCL label code without a printer.",
+  "type": "library",
+  "license": "MIT",
+  "homepage": "https://labelixa.com",
+  "keywords": [
+    "zpl",
+    "zebra",
+    "label",
+    "barcode",
+    "printing",
+    "epl",
+    "tspl",
+    "cpcl",
+    "thermal-printer"
+  ],
+  "require": {
+    "php": ">=8.1",
+    "ext-curl": "*",
+    "ext-json": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "Labelixa\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Labelixa\\Tests\\": "test/"
+    }
+  },
+  "support": {
+    "issues": "https://github.com/Labelixa/labelixa-sdk/issues",
+    "email": "support@labelixa.com",
+    "docs": "https://labelixa.com/docs/api"
+  },
+  "scripts": {
+    "test": "php test/run.php"
+  }
+}
