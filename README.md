@@ -42,6 +42,59 @@ try {
 Every other failure raises `LabelixaException` carrying the server's own
 message and the status code.
 
+## Reading a response
+
+Response keys are stable wire names and most of them are Turkish; they
+never change inside `/v1`. The English name of every key is listed at
+<https://labelixa.com/docs/api#response-fields>. A real answer of
+`$c->validate($zpl)` (`POST /v1/diagnostics`) for a label whose `^FD` field is not
+closed (abridged only where marked):
+
+```jsonc
+{
+  "diagnostics": [
+    {
+      "code": "ZPL2001",
+      "severity": "warning",
+      "message_key": "diag.zpl2001",
+      "line": 1, "col": 19, "end_line": 1, "end_col": 27,
+      "args": { "komut": "^FD" },           // komut: command
+      "quickfix": {                          // a one-click fix
+        "offset": 26, "end_offset": 26,
+        "yeni": "^FS"                        // yeni: replacement text to insert at offset
+        // (abridged: also a short English title and its message key)
+      },
+      // mesaj: message (always English)
+      "mesaj": "^FD field data is not terminated with ^FS; real printers may misread the commands that follow",
+      "onizleme": { "x": 50, "y": 50 },      // onizleme: preview position, in dots
+      "url": "https://labelixa.com/zpl/rules/ZPL2001"
+    }
+  ],
+  "ozet": { "toplam": 1, "error": 0, "warning": 1, "info": 0 },  // ozet: summary, toplam: total
+  "alanlar": [{ "line": 1, "x": 50, "y": 50 }],                 // alanlar: fields (each ^FD / ^FV)
+  "rfid": []
+}
+```
+
+An error is a status code plus a body. Render endpoints answer with one
+line of plain text (`dpmm must be 6, 8, 12 or 24`); JSON endpoints carry
+an English sentence and, where one exists, a stable machine-readable name
+in `kod` (code) or `hata_tipi` (error type). When you read the raw body,
+branch on that name, never on the sentence. This client throws `LabelixaException` with the status code and the sentence only; the status code is the stable signal it exposes.
+
+```jsonc
+// 401 Unauthorized
+// WWW-Authenticate: ApiKey realm="labelixa"
+{
+  // (abridged: the English sentence "Invalid API key", which the client
+  //  puts in the exception message)
+  "kod": "gecersiz_anahtar"   // kod: code (the key sent belongs to no account)
+}
+```
+
+When each error happens and how to fix it:
+<https://labelixa.com/docs/api#errors>.
+
 ## Using your application's HTTP stack
 
 The default transport is ext-curl. An application that already has an
@@ -88,6 +141,11 @@ Full reference: <https://labelixa.com/docs/api>.
 ```php
 $c = new Client(baseUrl: 'https://labels.internal');
 ```
+
+The API key is only sent over https: a client with a key and a plain
+`http` base URL (other than `localhost`) throws
+`InvalidArgumentException`. The default transport never follows
+redirects, so a server cannot forward the key to another host.
 
 ## License
 

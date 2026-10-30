@@ -27,6 +27,10 @@ final class CurlTransport implements Transport
             CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => $this->timeout,
+            // Never follow a redirect: the X-API-Key header would go to
+            // whatever host the Location names. The API does not
+            // redirect, so a 3xx surfaces as an error with its status.
+            CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_HTTPHEADER => array_map(
                 static fn (string $n, string $v): string => $n . ': ' . $v,
                 array_keys($headers),

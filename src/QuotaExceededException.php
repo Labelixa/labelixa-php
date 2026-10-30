@@ -20,7 +20,9 @@ final class QuotaExceededException extends LabelixaException
         string $serverMessage,
         public readonly int $retryAfter,
         public readonly ?string $action,
+        ?string $errorCode = null,
+        ?string $errorType = null,
     ) {
-        parent::__construct($status, $serverMessage);
+        parent::__construct($status, $serverMessage, $errorCode, $errorType);
     }
 }

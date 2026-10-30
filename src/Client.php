@@ -28,7 +28,7 @@ namespace Labelixa;
  */
 final class Client
 {
-    public const VERSION = '0.1.0';
+    public const VERSION = '0.2.0';
     public const DEFAULT_BASE_URL = 'https://api.labelixa.com';
 
     /** Printer languages the API renders and lints; ZPL is the default. */
@@ -65,11 +65,36 @@ final class Client
         $this->baseUrl = rtrim($baseUrl ?? self::DEFAULT_BASE_URL, '/');
         $this->headers = ['User-Agent' => 'labelixa-php/' . self::VERSION];
         if ($apiKey !== null && $apiKey !== '') {
+            self::checkKeyTransport($this->baseUrl);
             $this->headers['X-API-Key'] = $apiKey;
         }
         if ($clientName !== null && $clientName !== '') {
             $this->headers['X-Client'] = $clientName;
         }
+    }
+
+    /**
+     * The API key travels only over https, or plain http to a loopback
+     * address (local development). Anywhere else it would cross the
+     * network readable, so the client refuses to be built.
+     */
+    private static function checkKeyTransport(string $baseUrl): void
+    {
+        $scheme = strtolower((string) parse_url($baseUrl, PHP_URL_SCHEME));
+        if ($scheme === 'https') {
+            return;
+        }
+        $host = strtolower(trim((string) parse_url($baseUrl, PHP_URL_HOST), '[]'));
+        $loopback = $host === 'localhost' || $host === '::1'
+            || preg_match('/^127(\.\d{1,3}){3}$/', $host) === 1;
+        if ($scheme === 'http' && $loopback) {
+            return;
+        }
+        throw new \InvalidArgumentException(sprintf(
+            'refusing to send the API key to %s: use an https base URL '
+            . '(plain http is accepted only for localhost)',
+            $baseUrl,
+        ));
     }
 
     /**
@@ -317,20 +342,44 @@ final class Client
         );
 
         if ($res['status'] !== 200) {
-            // The message is capped: an error is a sentence, and a broken
-            // proxy can answer with a megabyte of HTML.
-            $message = substr($res['body'], 0, 500);
+            // Only the sentence of the JSON error answer is kept (see
+            // Contract::serverText), capped: an error is a sentence, and a
+            // broken proxy can answer with a megabyte of HTML.
+            $message = Contract::serverText($res['body']);
+            [$errorCode, $errorType] = self::serverFields($res['body']);
             if ($res['status'] === 402 || $res['status'] === 429) {
                 throw new QuotaExceededException(
                     $res['status'],
                     $message,
                     (int) ($res['headers']['retry-after'] ?? 60),
                     $res['headers']['x-quota-action'] ?? null,
+                    $errorCode,
+                    $errorType,
                 );
             }
-            throw new LabelixaException($res['status'], $message);
+            throw new LabelixaException($res['status'], $message, $errorCode, $errorType);
         }
 
         return $res;
+    }
+
+    /**
+     * The machine-readable code and error type of an API error answer. A
+     * field that is absent, empty or not a string is null, and so is
+     * everything for a body that is not a JSON object.
+     *
+     * @return array{0: ?string, 1: ?string}
+     */
+    private static function serverFields(string $raw): array
+    {
+        $body = json_decode($raw, true);
+        if (!is_array($body) || array_is_list($body)) {
+            return [null, null];
+        }
+        $pick = static function (string $key) use ($body): ?string {
+            $value = $body[$key] ?? null;
+            return is_string($value) && $value !== '' ? $value : null;
+        };
+        return [$pick(Contract::CODE_FIELD), $pick(Contract::ERROR_TYPE_FIELD)];
     }
 }

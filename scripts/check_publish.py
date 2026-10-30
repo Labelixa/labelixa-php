@@ -13,10 +13,14 @@ files and the source directory is mirrored publicly) and fails (exit code
 
 Scanned: every text file under the root except directories named .git,
 node_modules, __pycache__, dist, test, testdata, scripts, bin or obj, Go
-test files (*_test.go) and binaries. `contract.go` is exempt from the WORD rule only:
+test files (*_test.go), the Business Central test app (core-test) and
+binaries. `contract.go` (and its copies, e.g. `contract.ts`) is exempt from the WORD rule only:
 it holds the wire vocabulary (JSON keys, legacy command names) that
 existing installations depend on and that cannot be renamed; the other
 rules still apply to it.
+Business Central UI translation files (`Translations/<App>.de-DE.xlf`,
+`Translations/<App>.tr-TR.xlf`) are exempt from the language rules
+(characters, words, markers); the ticket-id rule still applies to them.
 
 Usage: python scripts/check_publish.py [root]
 The release workflow runs it before building; the repository test suite
@@ -46,12 +50,38 @@ WORD = re.compile(r"\b(?:" + "|".join(WORDS) + r")\b", re.IGNORECASE)
 # `bin/` holds a PUBLISHED file (bin/labelixa.mjs) and is scanned by the
 # node guard, which keeps its own list. Pointing THIS scanner at an npm
 # package would therefore skip that file.
+# `.gradle`, `.intellijPlatform`, `.kotlin` and `build` are Gradle's own
+# caches and outputs for the JetBrains plugin: machine-specific, never
+# published.
+# `core-test` is the Business Central test app (bc/): test code like
+# `test/` and `*_test.go`, never published.
 SKIP_DIRS = {".git", "node_modules", "__pycache__", "dist", "test", "testdata",
-             "scripts", "bin", "obj", "target"}
+             "scripts", "bin", "obj", "target", "build", ".gradle",
+             ".intellijPlatform", ".kotlin", "core-test", ".alpackages"}
 BINARY = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".gz",
           ".exe", ".woff", ".woff2", ".ttf"}
 # Files holding the frozen wire vocabulary: exempt from the WORD rule only.
-WORD_EXEMPT = {"contract.go"}
+# `Contract.kt` is the JetBrains plugin's copy of the same vocabulary;
+# `LBXWire.Codeunit.al` is the Business Central app's; `contract.ts` is the
+# n8n node's (API answer field names it renames to English). The SDKs and
+# the Pipedream components keep the same vocabulary (at least the error
+# answer's field name) in `contract.go` / `Contract.php` / `Contract.cs` /
+# `Contract.java` / `contract.mjs`.
+WORD_EXEMPT = {"contract.go", "Contract.kt", "LBXWire.Codeunit.al", "contract.ts",
+               "Contract.php", "Contract.cs", "Contract.java", "contract.mjs"}
+
+# Localized UI translation files of the Business Central apps. A translation
+# file is, by definition, written in its target language (German umlauts,
+# Turkish characters and words), so the language rules cannot apply to it.
+# The exemption is deliberately narrow: only these locale suffixes and only
+# files directly inside a `Translations` directory. The generated English
+# source (`*.g.xlf`), the AL code and any other file stay fully scanned, and
+# the ticket-id rule still applies to the translation files themselves.
+TRANSLATION_SUFFIXES = (".de-DE.xlf", ".tr-TR.xlf")
+
+
+def _is_translation(path: Path) -> bool:
+    return path.parent.name == "Translations" and path.name.endswith(TRANSLATION_SUFFIXES)
 
 
 def _files(root: Path) -> list[Path]:
@@ -81,11 +111,14 @@ def scan(root: Path) -> list[str]:
     for path in _files(root):
         text = path.read_text(encoding="utf-8", errors="replace")
         rel = path.relative_to(root)
+        translation = _is_translation(path)
         for n, line in enumerate(text.splitlines(), 1):
             where = f"{rel}:{n}"
             m = TICKET.search(line)
             if m:
                 problems.append(f"{where}: ticket id {m.group(0)!r}")
+            if translation:
+                continue
             m = TURKISH.search(line)
             if m:
                 problems.append(f"{where}: non-English character {m.group(0)!r}")

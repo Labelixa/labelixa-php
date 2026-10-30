@@ -10,6 +10,7 @@ declare(strict_types=1);
 //
 // No network: a fake Transport captures every request.
 
+require __DIR__ . '/../src/Contract.php';
 require __DIR__ . '/../src/Transport.php';
 require __DIR__ . '/../src/CurlTransport.php';
 require __DIR__ . '/../src/LabelixaException.php';
@@ -17,6 +18,7 @@ require __DIR__ . '/../src/QuotaExceededException.php';
 require __DIR__ . '/../src/Client.php';
 
 use Labelixa\Client;
+use Labelixa\Contract;
 use Labelixa\LabelixaException;
 use Labelixa\QuotaExceededException;
 use Labelixa\Transport;
@@ -189,6 +191,56 @@ test('400 is not a quota error and keeps the server message', function (): void 
     }
 });
 
+test('a JSON error answer keeps only the server sentence', function (): void {
+    $t = new FakeTransport(400, json_encode([Contract::ERROR_FIELD => 'Empty body']));
+    try {
+        (new Client(transport: $t))->renderPng(ZPL);
+        throw new RuntimeException('400 was swallowed');
+    } catch (LabelixaException $e) {
+        assertSame('Empty body', $e->serverMessage);
+        assertSame('HTTP 400: Empty body', $e->getMessage());
+    }
+    assertSame('{"x":1}', Contract::serverText('{"x":1}'), 'other JSON passes through');
+    assertSame(500, strlen(Contract::serverText(str_repeat('y', 900))));
+});
+
+test('the error carries the machine-readable code and error type', function (): void {
+    $t = new FakeTransport(403, json_encode([Contract::ERROR_FIELD => 'Scope missing',
+        Contract::CODE_FIELD => 'scope_missing']));
+    try {
+        (new Client(transport: $t))->renderPng(ZPL);
+        throw new RuntimeException('403 was swallowed');
+    } catch (LabelixaException $e) {
+        assertSame('scope_missing', $e->getErrorCode());
+        assertSame(null, $e->getErrorType());
+        assertSame('Scope missing', $e->serverMessage);
+    }
+    $t = new FakeTransport(402, json_encode([Contract::ERROR_FIELD => 'Trial over',
+        Contract::ERROR_TYPE_FIELD => 'TrialOver']), ['retry-after' => '5']);
+    try {
+        (new Client(transport: $t))->renderPng(ZPL);
+        throw new RuntimeException('402 was swallowed');
+    } catch (QuotaExceededException $e) {
+        assertSame(null, $e->getErrorCode());
+        assertSame('TrialOver', $e->getErrorType());
+        assertSame(5, $e->retryAfter);
+    }
+    $odd = json_encode([Contract::CODE_FIELD => 7, Contract::ERROR_TYPE_FIELD => '']);
+    foreach (['plain text', $odd, json_encode([Contract::CODE_FIELD])] as $body) {
+        try {
+            (new Client(transport: new FakeTransport(400, $body)))->renderPng(ZPL);
+            throw new RuntimeException('400 was swallowed');
+        } catch (LabelixaException $e) {
+            assertSame(null, $e->getErrorCode(), $body);
+            assertSame(null, $e->getErrorType(), $body);
+        }
+    }
+    $old = new LabelixaException(400, 'm');
+    assertSame(null, $old->getErrorCode());
+    assertSame('HTTP 400: m', $old->getMessage());
+    assertSame(null, (new QuotaExceededException(429, 'm', 60, null))->getErrorType());
+});
+
 test('barcode warning is an error, NOT a barcode', function (): void {
     // The server returns 200 + an error image + X-Warnings; handing that
     // back as "generated" would lie to the caller.
@@ -248,6 +300,57 @@ test('non-JSON response does not pass silently', function (): void {
     } catch (LabelixaException $e) {
         assertSame(true, str_contains($e->getMessage(), 'not JSON'));
     }
+});
+
+test('the key only travels over https or to loopback', function (): void {
+    foreach (['https://api.labelixa.com', 'http://127.0.0.1:8000',
+              'http://localhost:8000', 'http://[::1]:8000'] as $ok) {
+        new Client(apiKey: 'lbx_test', baseUrl: $ok, transport: new FakeTransport());
+    }
+    foreach (['http://api.labelixa.com', 'http://10.0.0.5',
+              'http://localhost.evil.test'] as $bad) {
+        try {
+            new Client(apiKey: 'lbx_test', baseUrl: $bad, transport: new FakeTransport());
+            throw new RuntimeException("key accepted for {$bad}");
+        } catch (InvalidArgumentException $e) {
+            assertSame(true, str_contains($e->getMessage(), 'https'));
+        }
+    }
+    new Client(baseUrl: 'http://x', transport: new FakeTransport());   // anonymous
+});
+
+test('the curl transport does not follow redirects', function (): void {
+    // A real local server that answers 307 to another port: the target
+    // must never be contacted. Needs pcntl (not on Windows).
+    if (!function_exists('pcntl_fork')) {
+        return;
+    }
+    $target = stream_socket_server('tcp://127.0.0.1:0');
+    $hop = stream_socket_server('tcp://127.0.0.1:0');
+    $targetPort = (int) substr(strrchr(stream_socket_get_name($target, false), ':'), 1);
+    $hopPort = (int) substr(strrchr(stream_socket_get_name($hop, false), ':'), 1);
+    $pid = pcntl_fork();
+    if ($pid === 0) {
+        $conn = stream_socket_accept($hop, 5);
+        fread($conn, 65536);
+        fwrite($conn, "HTTP/1.1 307 Temporary Redirect\r\nLocation: "
+            . "http://127.0.0.1:{$targetPort}/x\r\nContent-Length: 0\r\n"
+            . "Connection: close\r\n\r\n");
+        fclose($conn);
+        exit(0);
+    }
+    $c = new Client(apiKey: 'lbx_test', baseUrl: "http://127.0.0.1:{$hopPort}",
+        timeout: 5);
+    try {
+        $c->renderPng(ZPL);
+        throw new RuntimeException('a redirect was followed');
+    } catch (LabelixaException $e) {
+        assertSame(307, $e->status);
+    } finally {
+        pcntl_waitpid($pid, $status);
+    }
+    stream_set_blocking($target, false);
+    assertSame(false, @stream_socket_accept($target, 0), 'redirect target contacted');
 });
 
 printf("%d tests passed\n", $passed);
